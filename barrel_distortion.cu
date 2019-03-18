@@ -58,9 +58,11 @@ void barrelDistortion(Mat& _src, Mat& _dst,
 	cudaMemcpy(d_prop, prop, sizeof(Properties), cudaMemcpyHostToDevice);
 
 	// grid and block here
+	const dim3 blockSize(16, 16, 1);
+	const dim3 gridSize(prop->width / blockSize.x + 1, prop->height / blockSize.y + 1);
 
 	// call kernel function
-	barrel_distort_kernel<<<1, 1>>>(d_src, d_dst, d_prop);
+	barrel_distort_kernel<<<gridSize, blockSize>>>(d_src, d_dst, d_prop);
 
 	cudaMemcpy(dst.data, d_dst, imageSize * sizeof(uchar3), cudaMemcpyDeviceToHost);
 
