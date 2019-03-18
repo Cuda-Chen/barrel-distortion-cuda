@@ -1,7 +1,7 @@
 #include <iostream>
 #include <cstdlib>
 #include "opencv2/opencv.hpp"
-#include "barrel_distortion.hpp"
+#include "barrel_distortion.cuh"
 
 int main(int argc, char **argv)
 {
@@ -45,9 +45,8 @@ int main(int argc, char **argv)
 	}
 
 	// barrel distort here
-	barrelDistortion barrel = barrelDistortion(input, output, 
+	barrelDistortion(input, output, 
 		K, centerX, centerY, width, height);
-	barrel.barrel_distort();
 
 	// show output
 	imshow("distorted", output);

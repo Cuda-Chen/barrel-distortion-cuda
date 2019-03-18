@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.1)
 
-project(barrel_distort_cpp)
+project(barrel_distort_cuda)
 
 set(EXECUTABLE_OUTPUT_PATH "..")
 set(CMAKE_BUILD_TYPE Debug)
@@ -13,6 +13,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # OpenCV stuff
 find_package(OpenCV REQUIRED)
 
-add_executable(barrel_distort_cpp main.cpp barrel_distortion.hpp barrel_distortion.cpp)
+# CUDA stuff
+find_package(CUDA REQUIRED)
+set(CUDA_SEPARABLE_COMPILATION ON)
 
-target_link_libraries(barrel_distort_cpp ${OpenCV_LIBS})
+cuda_add_executable(barrel_distort_cuda main.cpp barrel_distortion.cuh barrel_distortion.cu)
+
+target_link_libraries(barrel_distort_cuda ${OpenCV_LIBS})

@@ -6,59 +6,72 @@
 using std::cout;
 using std::endl;
 using cv::Mat;
-using cv::Scalar;
 
-barrelDistortion::barrelDistortion(Mat& src, Mat& dst,
-	float K,
-	float centerX, float centerY,
-	int width, int height)
-{
-	this->src = src;
-	this->dst = dst;
-	this->K = K;
-	this->centerX = centerX;
-	this->centerY = centerY;
-	this->width = width;
-	this->height = height;
-}
+Mat src;
+Mat dst;
+struct Properties prop;
 
-void barrelDistortion::barrel_distort()
+void barrelDistortion(Mat& _src, Mat& _dst,
+	float _K,
+	float _centerX, float _centerY,
+	int _width, int _height)
 {
+	src = _src;
+	dst = _dst;
+
+	struct Properties* prop = new Properties[1];
+	prop->K = _K;
+	prop->centerX = _centerX;
+	prop->centerY = _centerY;
+	prop->width = _width;
+	prop->height = _height;
+
 	cout << "channels: " << src.channels() 
 		<< " type: " << src.type() << endl;
 
-	xshift = calc_shift(0, centerX-1, centerX, K);
-	float newcenterX = width - centerX;
-	float xshift_2 = calc_shift(0, newcenterX-1, newcenterX, K);
+	prop->xshift = calc_shift(0, prop->centerX - 1, prop->centerX, prop->K, prop->thresh);
+	float newcenterX = prop->width - prop->centerX;
+	float xshift_2 = calc_shift(0, newcenterX - 1, newcenterX, prop->K, prop->thresh);
 
-	yshift = calc_shift(0, centerY-1, centerY, K);
-	float newcenterY = height - centerY;
-	float yshift_2 = calc_shift(0, newcenterY-1, newcenterY, K);
+	prop->yshift = calc_shift(0, prop->centerY - 1, prop->centerY, prop->K, prop->thresh);
+	float newcenterY = prop->height - prop->centerY;
+	float yshift_2 = calc_shift(0, newcenterY - 1, newcenterY, prop->K, prop->thresh);
 
-	xscale = (width - xshift - xshift_2) / width;
-	yscale = (height - yshift - yshift_2) / height;
+	prop->xscale = (prop->width - prop->xshift - xshift_2) / prop->width;
+	prop->yscale = (prop->height - prop->yshift - yshift_2) / prop->height;
 
-	cout << xshift << " " << yshift << " " << xscale << " " << yscale << endl;
-	cout << height << endl;
-	cout << width << endl;
+	cout << prop->xshift << " " << prop->yshift << " " << prop->xscale << " " << prop->yscale << endl;
+	cout << prop->height << endl;
+	cout << prop->width << endl;
 
-	for(int j = 0; j < height; j++)
-	{
-		for(int i = 0; i < width; i++)
-		{
-			//Scalar temp;
-			cv::Vec3b temp;
-			float x = getRadialX((float)i, (float)j, centerX, centerY, K);
-			float y = getRadialY((float)i, (float)j, centerX, centerY, K);
-			//sampleImage(src, y, x, temp);
-			sampleImageTest(src, y, x, temp);
-			//dst.at<Scalar>(j, i) = temp;
-			dst.at<cv::Vec3b>(j, i) = temp;
-		}
-	}
+	uchar3* d_src;
+	uchar3* d_dst;
+	struct Properties* d_prop;
+	int imageSize = prop->height * prop->width;
+
+	cudaMalloc(&d_src, imageSize * sizeof(uchar3));
+	cudaMalloc(&d_dst, imageSize * sizeof(uchar3));
+	cudaMalloc(&d_prop, sizeof(Properties));
+
+	cudaMemcpy(d_src, src.data, imageSize * sizeof(uchar3), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_dst, dst.data, imageSize * sizeof(uchar3), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_prop, prop, sizeof(Properties), cudaMemcpyHostToDevice);
+
+	// grid and block here
+
+	// call kernel function
+	barrel_distort_kernel<<<1, 1>>>(d_src, d_dst, d_prop);
+
+	cudaMemcpy(dst.data, d_dst, imageSize * sizeof(uchar3), cudaMemcpyDeviceToHost);
+
+	cudaFree(d_src);
+	cudaFree(d_dst);
+	cudaFree(d_prop);
+
+	delete [] prop;
 }
 
-float barrelDistortion::calc_shift(float x1, float x2, float cx, float k)
+float calc_shift(float x1, float x2, float cx, float k, float thresh)
 {
 	float x3 = x1 + (x2 - x1) * 0.5;
 	float result1 = x1 + ((x1 - cx) * k * ((x1 - cx) * (x1 - cx)));
@@ -68,96 +81,75 @@ float barrelDistortion::calc_shift(float x1, float x2, float cx, float k)
 		return x1;
 	if(result3 < 0)
 	{
-		return calc_shift(x3, x2, cx, k);
+		return calc_shift(x3, x2, cx, k, thresh);
 	}
 	else
 	{
-		return calc_shift(x1, x3, cx, k);
+		return calc_shift(x1, x3, cx, k, thresh);
 	}
 }
 
-float barrelDistortion::getRadialX(float x, float y, float cx, float cy, float k)
+__device__ float getRadialX(float x, float y, struct Properties* prop)
 {
-	x = (x * xscale + xshift);
-	y = (y * yscale + yshift);
-	float result = x + ((x - cx) * k * ((x - cx) * (x - cx) + (y - cy) * (y - cy)));
+	x = (x * prop->xscale + prop->xshift);
+	y = (y * prop->yscale + prop->yshift);
+	float result = x + ((x - prop->centerX) * prop->K * ((x - prop->centerX) * (x - prop->centerX) + (y - prop->centerY) * (y - prop->centerY)));
 	return result;
 }
 
-float barrelDistortion::getRadialY(float x, float y, float cx, float cy, float k)
+__device__ float getRadialY(float x, float y, struct Properties* prop)
 {
-	x = (x * xscale + xshift);
-    	y = (y * yscale + yshift);
-    	float result = y + ((y - cy) * k * ((x - cx) * (x - cx) + (y - cy) * (y - cy)));
+	x = (x * prop->xscale + prop->xshift);
+    	y = (y * prop->yscale + prop->yshift);
+    	float result = y + ((y - prop->centerY) * prop->K * ((x - prop->centerX) * (x - prop->centerX) + (y - prop->centerY) * (y - prop->centerY)));
 	return result;
 }
 
-void barrelDistortion::sampleImage(Mat& src, float idx0, float idx1, Scalar& result)
+__global__ void barrel_distort_kernel(uchar3* src, uchar3* dst, struct Properties* prop)
+{
+	for(int j = blockIdx.x * blockDim.x + threadIdx.x; j < prop->height; j += blockDim.x * gridDim.x)
+	{
+		for(int i = blockIdx.y * blockDim.y + threadIdx.y; i < prop->width; i += blockDim.y * gridDim.y)
+		{
+			uchar3 temp;
+			float x = getRadialX((float)i, (float)j, prop);
+			float y = getRadialY((float)i, (float)j, prop);
+			sampleImageTest(src, y, x, temp, prop);
+			dst[(j * prop->width) + i] = temp;
+		}
+	}
+}
+
+__device__ void sampleImageTest(uchar3* src, float idx0, float idx1, uchar3& result, struct Properties* prop)
 {
 	// if one of index is out-of-bound
 	if((idx0 < 0) ||
 		(idx1 < 0) ||
-		(idx0 > height - 1) ||
-		(idx1 > width - 1))
+		(idx0 > prop->height - 1) ||
+		(idx1 > prop->width - 1))
 	{
 		//temp = Scalar(0, 0, 0, 0);
-		result.val[0] = 0;
-		result.val[1] = 0;
-		result.val[2] = 0;
-		result.val[3] = 0;
-		return;
-	}
-
-	float idx0_floor = floor(idx0);
-    	float idx0_ceil = ceil(idx0);
-	float idx1_floor = floor(idx1);
-    	float idx1_ceil = ceil(idx1);
-
-	Scalar s1 = src.at<Scalar>((int)idx0_floor, (int)idx1_floor);
-	Scalar s2 = src.at<Scalar>((int)idx0_floor, (int)idx1_ceil);
-	Scalar s3 = src.at<Scalar>((int)idx0_ceil, (int)idx1_ceil);
-	Scalar s4 = src.at<Scalar>((int)idx0_ceil, (int)idx1_floor);
-
-	float x = idx0 - idx0_floor;
-	float y = idx1 - idx1_floor;
-
-	result.val[0] = s1.val[0] * (1 - x) * (1 - y) + s2.val[0] * (1 - x) * y + s3.val[0] * x * y + s4.val[0] * x * (1 - y);
-	result.val[1] = s1.val[1] * (1 - x) * (1 - y) + s2.val[1] * (1 - x) * y + s3.val[1] * x * y + s4.val[1] * x * (1 - y);
-	result.val[2] = s1.val[2] * (1 - x) * (1 - y) + s2.val[2] * (1 - x) * y + s3.val[2] * x * y + s4.val[2] * x * (1 - y);
-	result.val[3] = s1.val[3] * (1 - x) * (1 - y) + s2.val[3] * (1 - x) * y + s3.val[3] * x * y + s4.val[3] * x * (1 - y);
-}
-
-void barrelDistortion::sampleImageTest(Mat& src, float idx0, float idx1, cv::Vec3b& result)
-{
-	// if one of index is out-of-bound
-	if((idx0 < 0) ||
-		(idx1 < 0) ||
-		(idx0 > height - 1) ||
-		(idx1 > width - 1))
-	{
-		//temp = Scalar(0, 0, 0, 0);
-		result.val[0] = 0;
-		result.val[1] = 0;
-		result.val[2] = 0;
+		result.x = 0;
+		result.y = 0;
+		result.z = 0;
 		//result.val[3] = 0;
 		return;
 	}
 
-	float idx0_floor = floor(idx0);
-    	float idx0_ceil = ceil(idx0);
-	float idx1_floor = floor(idx1);
-    	float idx1_ceil = ceil(idx1);
+	int idx0_floor = (int)floor(idx0);
+    	int idx0_ceil = (int)ceil(idx0);
+	int idx1_floor = (int)floor(idx1);
+    	int idx1_ceil = (int)ceil(idx1);
 
-	cv::Vec3b s1 = src.at<cv::Vec3b>((int)idx0_floor, (int)idx1_floor);
-	cv::Vec3b s2 = src.at<cv::Vec3b>((int)idx0_floor, (int)idx1_ceil);
-	cv::Vec3b s3 = src.at<cv::Vec3b>((int)idx0_ceil, (int)idx1_ceil);
-	cv::Vec3b s4 = src.at<cv::Vec3b>((int)idx0_ceil, (int)idx1_floor);
+	uchar3 s1 = src[(idx0_floor * prop->width) + idx1_floor];
+	uchar3 s2 = src[(idx0_floor * prop->width) + idx1_ceil];
+	uchar3 s3 = src[(idx0_ceil * prop->width) + idx1_ceil];
+	uchar3 s4 = src[(idx0_ceil * prop->width) + idx1_floor];
 
 	float x = idx0 - idx0_floor;
 	float y = idx1 - idx1_floor;
 
-	result.val[0] = s1.val[0] * (1 - x) * (1 - y) + s2.val[0] * (1 - x) * y + s3.val[0] * x * y + s4.val[0] * x * (1 - y);
-	result.val[1] = s1.val[1] * (1 - x) * (1 - y) + s2.val[1] * (1 - x) * y + s3.val[1] * x * y + s4.val[1] * x * (1 - y);
-	result.val[2] = s1.val[2] * (1 - x) * (1 - y) + s2.val[2] * (1 - x) * y + s3.val[2] * x * y + s4.val[2] * x * (1 - y);
-	//result.val[3] = s1.val[3] * (1 - x) * (1 - y) + s2.val[3] * (1 - x) * y + s3.val[3] * x * y + s4.val[3] * x * (1 - y);
+	result.x = s1.x * (1 - x) * (1 - y) + s2.x * (1 - x) * y + s3.x * x * y + s4.x * x * (1 - y);
+	result.y = s1.y * (1 - x) * (1 - y) + s2.y * (1 - x) * y + s3.y * x * y + s4.y * x * (1 - y);
+	result.z = s1.z * (1 - x) * (1 - y) + s2.z * (1 - x) * y + s3.z * x * y + s4.z * x * (1 - y);
 }
